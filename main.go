@@ -35,10 +35,13 @@ func (s *Server) IsAlive() bool {
 
 // LoadBalancer represents a load balancer
 type LoadBalancer struct {
-	servers     []*Server
-	current     int
-	mu          sync.Mutex
-	healthCheck string
+	servers       []*Server
+	current       int
+	mu            sync.Mutex
+	healthCheck   string
+	serverStats   map[string]int // Track requests per server
+	statsMu       sync.Mutex     // Mutex for stats
+	totalRequests int            // Total number of requests handled
 }
 
 // NextServer returns the next server based on round-robin algorithm
@@ -48,17 +51,33 @@ func (lb *LoadBalancer) NextServer() *Server {
 
 	// Check for available servers
 	serverCount := len(lb.servers)
+	if serverCount == 0 {
+		return nil
+	}
+
+	// Try to find an available server using round-robin
 	for i := 0; i < serverCount; i++ {
+		// Move to next server (round-robin)
 		lb.current = (lb.current + 1) % serverCount
+
+		// Check if this server is alive
 		if lb.servers[lb.current].IsAlive() {
 			return lb.servers[lb.current]
 		}
 	}
+
+	// If we went through all servers and none are alive
 	return nil
 }
 
 // ServeHTTP implements the http.Handler interface
 func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Special endpoint for stats
+	if r.URL.Path == "/lb-stats" {
+		lb.handleStats(w, r)
+		return
+	}
+
 	// Log incoming request
 	fmt.Printf("Received request from %s\n%s %s %s\n", r.RemoteAddr, r.Method, r.URL.Path, r.Proto)
 	for name, headers := range r.Header {
@@ -73,6 +92,12 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No available servers", http.StatusServiceUnavailable)
 		return
 	}
+
+	// Update statistics
+	lb.statsMu.Lock()
+	lb.totalRequests++
+	lb.serverStats[server.URL.Host]++
+	lb.statsMu.Unlock()
 
 	// Create the backend URL
 	targetURL := *server.URL
@@ -153,13 +178,41 @@ func (lb *LoadBalancer) HealthCheck() {
 func (lb *LoadBalancer) ScheduleHealthChecks(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				lb.HealthCheck()
-			}
+		// Run an initial health check immediately
+		lb.HealthCheck()
+
+		// Then run on the ticker schedule
+		for range ticker.C {
+			lb.HealthCheck()
 		}
 	}()
+}
+
+// handleStats displays load balancing statistics
+func (lb *LoadBalancer) handleStats(w http.ResponseWriter, r *http.Request) {
+	lb.statsMu.Lock()
+	defer lb.statsMu.Unlock()
+
+	fmt.Fprintf(w, "Load Balancer Statistics:\n\n")
+	fmt.Fprintf(w, "Total Requests: %d\n\n", lb.totalRequests)
+	fmt.Fprintf(w, "Distribution:\n")
+
+	for host, count := range lb.serverStats {
+		percent := 0.0
+		if lb.totalRequests > 0 {
+			percent = float64(count) / float64(lb.totalRequests) * 100
+		}
+		fmt.Fprintf(w, "  %s: %d requests (%.1f%%)\n", host, count, percent)
+	}
+
+	fmt.Fprintf(w, "\nServer Health:\n")
+	for _, server := range lb.servers {
+		status := "UP"
+		if !server.IsAlive() {
+			status = "DOWN"
+		}
+		fmt.Fprintf(w, "  %s: %s\n", server.URL.Host, status)
+	}
 }
 
 func main() {
@@ -195,8 +248,11 @@ func main() {
 
 	// Create load balancer
 	lb := &LoadBalancer{
-		servers:     servers,
-		healthCheck: *healthCheckPath,
+		servers:       servers,
+		current:       -1, // Start at -1 so first call to NextServer gives us index 0
+		healthCheck:   *healthCheckPath,
+		serverStats:   make(map[string]int),
+		totalRequests: 0,
 	}
 
 	// Schedule health checks
