@@ -235,15 +235,15 @@ func main() {
 	// Initialize servers
 	var servers []*Server
 	for _, serverURL := range serverURLs {
-		url, err := url.Parse(serverURL)
+		pUrl, err := url.Parse(serverURL)
 		if err != nil {
 			log.Fatalf("Invalid server URL: %s", err)
 		}
 		servers = append(servers, &Server{
-			URL:   url,
+			URL:   pUrl,
 			Alive: true,
 		})
-		log.Printf("Added backend server: %s", url.String())
+		log.Printf("Added backend server: %s", pUrl.String())
 	}
 
 	// Create load balancer
