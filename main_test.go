@@ -21,24 +21,18 @@ func TestNextServer(t *testing.T) {
 	}
 
 	// Check that we rotate through all servers in round-robin fashion
-	s1 := lb.NextServer()
-	if s1.URL.Host != "localhost:8081" {
-		t.Errorf("Expected server 1, got %s", s1.URL.Host)
+	expectedServers := map[int]string{
+		1: "localhost:8081",
+		2: "localhost:8082",
+		3: "localhost:8080",
+		4: "localhost:8081",
 	}
 
-	s2 := lb.NextServer()
-	if s2.URL.Host != "localhost:8082" {
-		t.Errorf("Expected server 2, got %s", s2.URL.Host)
-	}
-
-	s3 := lb.NextServer()
-	if s3.URL.Host != "localhost:8080" {
-		t.Errorf("Expected server 0, got %s", s3.URL.Host)
-	}
-
-	s4 := lb.NextServer()
-	if s4.URL.Host != "localhost:8081" {
-		t.Errorf("Expected server 1, got %s", s4.URL.Host)
+	for i, expectedHost := range expectedServers {
+		server := lb.NextServer()
+		if server.URL.Host != expectedHost {
+			t.Errorf("Expected server %d, got %s", i, server.URL.Host)
+		}
 	}
 
 	// Test with a server marked as not alive
